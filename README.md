@@ -13,7 +13,7 @@ Raw SEC Filing (1M Context - Muse Spark)
         |
  [VerifierAgent] -> Cross-check Payoff vs Prospectus Text, Bounds, Monotonicity
         |
- [Viz Agent - Muse Image Style] -> Payoff Diagram + Risk Heatmap PNGs
+ [Viz Agent] -> Payoff Diagram + Risk Heatmap PNGs
 
 
 
@@ -35,7 +35,7 @@ Raw SEC Filing (1M Context - Muse Spark)
 bash
 
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=sk-ant-...   # optional - enables Muse 1M extraction
+export META_MODEL_API_KEY=...   # optional - enables Muse Spark extraction (Meta Model API)
 python main.py --filing examples/sample_termsheet.txt --paths 50000
 Parallel Modal sandboxes:
 modal deploy monte_carlo.py && python main.py --modal --paths 50000

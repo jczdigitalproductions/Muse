@@ -1,9 +1,16 @@
-# WealthPath AI
+# Wealth Management
 
-Goal-based wealth pathways: set a target amount, timeframe, and effort level,
-get structured strategies across bank/broker bonuses, alternative capital,
-high-pay gigs, and startup programs. Free core pathways; premium arbitrage
-playbooks unlock via Stripe test-mode checkout ("WealthPath Pro", $29 one-time).
+Two features behind one login:
+
+- **WealthPath**: goal-based wealth pathways across bank/broker bonuses,
+  alternative capital, high-pay gigs, and startup programs. Free core
+  pathways; premium arbitrage playbooks unlock via Stripe test-mode checkout
+  ("WealthPath Pro", $29 one-time).
+- **Structured Notes**: paste a 424B2 termsheet (or use the sample Phoenix
+  autocallable). Terms extract via Muse Spark when a Meta key is configured,
+  otherwise via deterministic patterns; then correlated Monte Carlo pricing,
+  six historical stress regimes, verification checks, and payoff/heatmap
+  charts.
 
 ## Run
 

@@ -7,7 +7,10 @@ Env:  SECRET_KEY, STRIPE_SECRET_KEY (test, sk_test_...),
 """
 import json
 import os
+import sys
 from functools import wraps
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import (
     Flask,
@@ -33,6 +36,10 @@ from strategies import EFFORTS, TIMEFRAMES, generate
 
 PRO_PRICE_CENTS = 2900
 PRO_LABEL = "WealthPath Pro"
+NOTES_SAMPLE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "examples", "sample_termsheet.txt",
+)
 
 
 def create_app(db_path=None):
@@ -236,6 +243,96 @@ def create_app(db_path=None):
                         obj.get("customer"))
         return jsonify({"received": True})
 
+    @app.route("/notes")
+    @login_required
+    def notes():
+        user = current_user()
+        has_meta = bool(
+            os.getenv("META_MODEL_API_KEY") or os.getenv("OPENAI_API_KEY")
+        )
+        try:
+            import numpy  # noqa: F401
+            engine_ready = True
+        except ImportError:
+            engine_ready = False
+        return render_template(
+            "notes.html",
+            email=user["email"],
+            is_pro=bool(user["is_pro"]),
+            has_meta=has_meta,
+            engine_ready=engine_ready,
+        )
+
+    @app.route("/api/notes/analyze", methods=["POST"])
+    @login_required
+    def api_notes_analyze():
+        try:
+            from extractor import ProspectusExtractor
+            from monte_carlo import MonteCarloEngine
+            from stress import run_stress
+            from verify import cross_verify
+            from visualize import payoff_diagram, risk_heatmap
+        except ImportError:
+            return jsonify({
+                "error": "Note engine not installed: "
+                "pip install numpy pandas matplotlib."
+            }), 503
+        body = request.get_json(force=True, silent=True) or {}
+        if body.get("use_sample"):
+            try:
+                with open(NOTES_SAMPLE, encoding="utf-8",
+                          errors="ignore") as f:
+                    text = f.read()
+            except OSError:
+                return jsonify({"error": "Sample termsheet not found."}), 500
+        else:
+            text = body.get("text", "")
+        if not text or len(text.strip()) < 20:
+            return jsonify({"error": "Paste a termsheet of at least 20 "
+                            "characters or use the sample."}), 400
+        if len(text) > 200000:
+            return jsonify({"error": "Termsheet too long "
+                            "(200k character cap)."}), 400
+        try:
+            n_paths = int(body.get("n_paths", 10000))
+            heat_n = int(body.get("heat_n", 5))
+            heat_paths = int(body.get("heat_paths", 2000))
+        except (TypeError, ValueError):
+            return jsonify({"error": "n_paths, heat_n and heat_paths must "
+                            "be integers."}), 400
+        if not 500 <= n_paths <= 50000:
+            return jsonify({"error": "n_paths must be between 500 "
+                            "and 50000."}), 400
+        if not 2 <= heat_n <= 8 or not 200 <= heat_paths <= 8000:
+            return jsonify({"error": "heat_n must be 2-8 and heat_paths "
+                            "200-8000."}), 400
+
+        extractor = ProspectusExtractor()
+        note = extractor.extract_text(text[:200000])
+        engine = MonteCarloEngine(note)
+        metrics = engine.price(n_paths=n_paths)
+        stress_df = run_stress(engine, n_paths=min(n_paths, 10000))
+        stress = [{"regime": idx,
+                   **{k: round(float(v), 4) for k, v in row.items()}}
+                  for idx, row in stress_df.iterrows()]
+        checks = cross_verify(note, metrics, strict=False)
+        charts = {
+            "payoff": payoff_diagram(note, save=None),
+            "heatmap": risk_heatmap(engine, save=None, n=heat_n,
+                                    n_paths=heat_paths),
+        }
+        return jsonify({
+            "extraction": extractor.last_method,
+            "terms": note.to_dict(),
+            "metrics": {k: round(float(v), 4) for k, v in metrics.items()},
+            "stress": stress,
+            "verification": {
+                "passed": bool(all(checks.values())),
+                "checks": {k: bool(v) for k, v in checks.items()},
+            },
+            "charts": charts,
+        })
+
     @app.route("/success")
     @login_required
     def success():
@@ -255,6 +352,6 @@ app = create_app()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    print(f"WealthPath AI on http://127.0.0.1:{port} "
+    print(f"Wealth Management on http://127.0.0.1:{port} "
           f"(demo login {SEED_EMAIL} / What!JCZ)")
     app.run(host="127.0.0.1", port=port)

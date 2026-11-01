@@ -26,6 +26,7 @@ ENV/
 setenv.bat
 setup.txt
 git_work.bat
+SKILL.md
 
 # Editors and operating systems
 .vscode/
