@@ -10,9 +10,17 @@ Scope is exactly one ticker, end to end — nothing wider in v1.
 
 ## Runtime rule (this is what the judges can see)
 - The submitted app itself must **call the Meta Model API at runtime**
-  (OpenAI SDK client pointing to the designated hackathon endpoint,
-  model muse-spark-1.3, Standard tier).
+  (OpenAI SDK client, model muse-spark-1.3, Standard tier).
+  Endpoint defaults to `https://api.meta.ai/v1`; override with
+  `META_MODEL_API_BASE` only if the organizers designate another base URL.
+  API key: `META_MODEL_API_KEY` from dev.meta.ai ($150 hackathon credits,
+  10-day window).
 - Code merely generated in a web chat does not count as using Meta AI tooling.
+- Per the event rules, Use of Meta AI Tooling is 25% of judging and must go
+  beyond a basic integration: Muse drafts the memo AND a second Muse call
+  audits every number against the tool outputs before the memo ships. The CLI
+  prints the model + endpoint + verification result to stderr (memo JSON on
+  stdout stays strict).
 
 ## Data rules — do not relax these
 - Factor scores come from `sp500_factor_ranking.csv`, dated **Oct 5, 2026**.

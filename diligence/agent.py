@@ -1,9 +1,10 @@
-"""One-ticker memo agent: parallel tools + Meta Model API memo.
+"""One-ticker memo agent: parallel tools + Meta Model API draft and verify.
 
-Strict memo JSON keys: thesis, factor_breakdown, earnings_quality, risks,
-what_would_change_the_thesis, sources, risk_flag. Exactly one risk flag,
-verbatim from a tool output (or a NO_CLEAN_FLAG finding when the tools
-return none).
+Muse (muse-spark-1.3) drafts the memo, then a second Muse call audits it:
+every number must trace to a tool output. Strict memo JSON keys: thesis,
+factor_breakdown, earnings_quality, risks, what_would_change_the_thesis,
+sources, risk_flag. Exactly one risk flag, verbatim from a tool output
+(or a NO_CLEAN_FLAG finding when the tools return none).
 """
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -40,6 +41,18 @@ Rules:
   one-sentence finding (do not invent a risk to fill the gap).
 - Do not force a growth-vs-quality caveat; describe what the tools show.
 - sources must name the three tools and the factor file."""
+
+VERIFY_SYSTEM_PROMPT = """You audit a one-ticker diligence memo against tool outputs.
+Return a JSON object with EXACTLY these keys: memo_ok (boolean), issues
+(list of strings).
+Rules:
+- memo_ok is true only if EVERY number in the memo also appears in the tool
+  outputs, the memo has exactly the keys thesis, factor_breakdown,
+  earnings_quality, risks, what_would_change_the_thesis, sources, risk_flag,
+  and risk_flag is verbatim one of candidate_risk_flags (or starts with
+  "NO_CLEAN_FLAG:" when that list is empty).
+- List one issue per violation, quoting the offending memo text. Empty list
+  when memo_ok is true. Never invent tool values; check against the payload."""
 
 
 class MemoValidationError(ValueError):
@@ -93,13 +106,70 @@ def validate_memo(memo, candidates):
     return memo
 
 
+def validate_verification(obj):
+    if not isinstance(obj, dict):
+        raise MemoValidationError("Verification must be a JSON object.")
+    if set(obj.keys()) != {"memo_ok", "issues"}:
+        raise MemoValidationError(
+            "Verification keys must be exactly ['memo_ok', 'issues']."
+        )
+    if not isinstance(obj["memo_ok"], bool):
+        raise MemoValidationError("Verification memo_ok must be a boolean.")
+    if not isinstance(obj["issues"], list) or not all(
+        isinstance(i, str) for i in obj["issues"]
+    ):
+        raise MemoValidationError("Verification issues must be a string list.")
+    if obj["memo_ok"] and obj["issues"]:
+        raise MemoValidationError("Verification ok with non-empty issues.")
+    return obj
+
+
 def _default_completer(system_prompt, payload):
     client = meta_client.build_client()
-    return meta_client.complete_memo(client, system_prompt, payload)
+    return meta_client.complete_json(client, system_prompt, payload)
 
 
-def run(ticker, completer=None):
-    """Run the three tools in parallel, then draft the memo via Meta API."""
+def _draft_memo(completer, payload_obj, candidates):
+    error = None
+    for _ in range(2):  # one retry on validation failure
+        if error is not None:
+            payload_obj["PREVIOUS_ATTEMPT_ERROR"] = error
+        raw = completer(SYSTEM_PROMPT, json.dumps(payload_obj, indent=2))
+        try:
+            return validate_memo(json.loads(_strip_fences(raw)), candidates)
+        except (json.JSONDecodeError, MemoValidationError) as exc:
+            error = str(exc)
+    raise MemoValidationError(f"Memo failed validation twice: {error}")
+
+
+def _verify_memo(completer, payload_obj, memo):
+    audit = dict(payload_obj)
+    audit.pop("PREVIOUS_ATTEMPT_ERROR", None)
+    audit["memo_under_review"] = memo
+    error = None
+    for _ in range(2):  # one retry on malformed verification
+        if error is not None:
+            audit["PREVIOUS_ATTEMPT_ERROR"] = error
+        raw = completer(
+            VERIFY_SYSTEM_PROMPT, json.dumps(audit, indent=2)
+        )
+        try:
+            verdict = validate_verification(json.loads(_strip_fences(raw)))
+        except (json.JSONDecodeError, MemoValidationError) as exc:
+            error = str(exc)
+            continue
+        if not verdict["memo_ok"]:
+            raise MemoValidationError(
+                "Meta verifier rejected the memo: "
+                + "; ".join(verdict["issues"])
+            )
+        return verdict
+    raise MemoValidationError(f"Verification failed twice: {error}")
+
+
+def run_with_report(ticker, completer=None, verify=True):
+    """Draft the memo via Meta API, verify it, and report model usage."""
+    using_stub = completer is not None
     completer = completer or _default_completer
     # Fail fast on excluded/unknown tickers before any model call.
     get_factor_scores(ticker)
@@ -119,14 +189,20 @@ def run(ticker, completer=None):
         "earnings_quality": eq,
         "candidate_risk_flags": candidates,
     }
-    error = None
-    for _ in range(2):  # one retry on validation failure
-        if error is not None:
-            payload_obj["PREVIOUS_ATTEMPT_ERROR"] = error
-        raw = completer(SYSTEM_PROMPT, json.dumps(payload_obj, indent=2))
-        try:
-            memo = json.loads(_strip_fences(raw))
-            return validate_memo(memo, candidates)
-        except (json.JSONDecodeError, MemoValidationError) as exc:
-            error = str(exc)
-    raise MemoValidationError(f"Memo failed validation twice: {error}")
+    memo = _draft_memo(completer, payload_obj, candidates)
+    issues = []
+    if verify:
+        issues = _verify_memo(completer, payload_obj, memo)["issues"]
+    report = {
+        "model": meta_client.MODEL,
+        "endpoint": "stub" if using_stub else meta_client.resolve_base_url(),
+        "verified": verify,
+        "issues": issues,
+    }
+    return memo, report
+
+
+def run(ticker, completer=None, verify=True):
+    """Run the three tools in parallel, then draft and verify via Meta API."""
+    memo, _ = run_with_report(ticker, completer=completer, verify=verify)
+    return memo

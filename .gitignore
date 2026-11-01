@@ -25,6 +25,7 @@ ENV/
 *.local
 setenv.bat
 setup.txt
+git_work.bat
 
 # Editors and operating systems
 .vscode/

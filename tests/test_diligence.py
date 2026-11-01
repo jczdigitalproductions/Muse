@@ -98,7 +98,7 @@ def test_memo_passes_numbers_from_tools_and_verbatim_flag():
         flag = "Cash conversion 0.94x trails peer median 1.02x (as of Oct 5, 2026)"
         return json.dumps(_valid_memo(flag))
 
-    memo = run("NVDA", completer=completer)
+    memo = run("NVDA", completer=completer, verify=False)
     assert memo["risk_flag"].startswith("Cash conversion 0.94x")
     # The model call received the tool numbers it must cite.
     for number in ("1.799", "117.21", "69.99", "27.33", "0.94", "1.02"):
@@ -140,7 +140,7 @@ def test_no_clean_flag_path_when_tools_return_none():
             "risk_flag": "NO_CLEAN_FLAG: tools returned no flag candidates.",
         })
 
-    memo = run("MSFT", completer=completer)
+    memo = run("MSFT", completer=completer, verify=False)
     assert memo["risk_flag"].startswith("NO_CLEAN_FLAG:")
 
     def bad_completer(system, payload):
@@ -152,13 +152,26 @@ def test_no_clean_flag_path_when_tools_return_none():
         run("MSFT", completer=bad_completer)
 
 
-def test_client_missing_env_fails_clearly(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_BASE", raising=False)
-    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+def test_client_missing_key_fails_clearly(monkeypatch):
     monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    with pytest.raises(RuntimeError, match="META_MODEL_API_BASE"):
+    with pytest.raises(RuntimeError, match="META_MODEL_API_KEY"):
         client.build_client()
+
+
+def test_client_missing_openai_package_fails_clearly(monkeypatch):
+    monkeypatch.setenv("META_MODEL_API_KEY", "test-key")
+    monkeypatch.setitem(sys.modules, "openai", None)
+    with pytest.raises(RuntimeError, match="openai package"):
+        client.build_client()
+
+
+def test_client_defaults_to_meta_model_api(monkeypatch):
+    monkeypatch.delenv("META_MODEL_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    assert client.resolve_base_url() == "https://api.meta.ai/v1"
+    monkeypatch.setenv("META_MODEL_API_BASE", "https://custom.example/v1")
+    assert client.resolve_base_url() == "https://custom.example/v1"
 
 
 def test_client_calls_meta_model_endpoint(monkeypatch):
@@ -192,3 +205,71 @@ def test_client_calls_meta_model_endpoint(monkeypatch):
     assert calls["api_key"] == "test-key"
     assert calls["model"] == "muse-spark-1.3"
     assert calls["response_format"] == {"type": "json_object"}
+
+
+def _draft_then_verdict(memo_json, verdict_json, seen=None):
+    def completer(system, payload):
+        if system == agent.VERIFY_SYSTEM_PROMPT:
+            if seen is not None:
+                seen["audit"] = payload
+            return verdict_json
+        if seen is not None:
+            seen.setdefault("drafts", []).append(payload)
+        return memo_json
+
+    return completer
+
+
+def test_verify_pass_reports_meta_model_usage():
+    flag = "Cash conversion 0.94x trails peer median 1.02x (as of Oct 5, 2026)"
+    seen = {}
+    completer = _draft_then_verdict(
+        json.dumps(_valid_memo(flag)),
+        json.dumps({"memo_ok": True, "issues": []}),
+        seen,
+    )
+    memo, report = agent.run_with_report("NVDA", completer=completer)
+    assert memo["risk_flag"] == flag
+    assert report["model"] == "muse-spark-1.3"
+    assert report["endpoint"] == "stub"
+    assert report["verified"] is True
+    assert report["issues"] == []
+    # The audit prompt received both the memo and the tool numbers.
+    audit = json.loads(seen["audit"])
+    assert audit["memo_under_review"]["risk_flag"] == flag
+    assert audit["factor_scores"]["composite_z"] == pytest.approx(1.799)
+    assert len(seen["drafts"]) == 1
+
+
+def test_verifier_rejection_blocks_memo():
+    flag = "Cash conversion 0.94x trails peer median 1.02x (as of Oct 5, 2026)"
+    completer = _draft_then_verdict(
+        json.dumps(_valid_memo(flag)),
+        json.dumps({"memo_ok": False,
+                    "issues": ['"ROE 999%" not in tool outputs']}),
+    )
+    with pytest.raises(MemoValidationError, match="ROE 999%"):
+        agent.run_with_report("NVDA", completer=completer)
+
+
+def test_malformed_verification_retries_then_raises():
+    flag = "Cash conversion 0.94x trails peer median 1.02x (as of Oct 5, 2026)"
+    calls = []
+    orig = _draft_then_verdict(json.dumps(_valid_memo(flag)), "not json")
+
+    def completer(system, payload):
+        calls.append(system)
+        return orig(system, payload)
+
+    with pytest.raises(MemoValidationError, match="Verification failed twice"):
+        agent.run_with_report("NVDA", completer=completer)
+    assert sum(1 for s in calls if s == agent.VERIFY_SYSTEM_PROMPT) == 2
+
+
+def test_verification_validates_shape():
+    with pytest.raises(MemoValidationError, match="exactly"):
+        agent.validate_verification({"memo_ok": True})
+    with pytest.raises(MemoValidationError, match="boolean"):
+        agent.validate_verification({"memo_ok": "yes", "issues": []})
+    with pytest.raises(MemoValidationError, match="non-empty issues"):
+        agent.validate_verification({"memo_ok": True, "issues": ["x"]})
