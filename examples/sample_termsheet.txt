@@ -1,0 +1,6 @@
+Issuer: Goldman Sachs - Phoenix Autocallable Equity Linked Note
+Underlyings: SPX, NDX, RTY - Worst-of Basket
+Coupon Rate: 9.50% per annum, paid quarterly if Coupon Barrier 70% is met, with memory.
+Autocall Barrier: 100% on observation dates Year 1, 1.5, 2, 2.5
+Knock-In Barrier: 60% European, Downside Threshold 60%. If breached at maturity, principal at risk linear.
+Maturity: 3 years. Notional: $1000
