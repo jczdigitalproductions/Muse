@@ -85,9 +85,9 @@ wealthpath\.venv\Scripts\python -m pytest wealthpath/tests tests -q
 ```text
 wealthpath/          Flask app: routes, ELN engine, DCA engine, copilot, ELN/EDGAR discovery
   templates/ static/ Jinja pages + vanilla JS (WealthTest, WealthPath, copilot, notes)
-  tests/             App suite (auth, tabs, ELN skill, EDGAR, copilot, DCA)
+  tests/             App suite (auth, tabs, EDGAR, copilot, DCA)
 diligence/           Meta Model API client (stdlib HTTPS) + draft-and-verify memo agent
 extractor.py ...     Structured-note parsing, Monte Carlo, stress, verify, visualize
 tests/               Root suite (diligence agent, client, payoff)
-SKILL.md             ELN extraction skill contract the workbench implements
+
 ```
